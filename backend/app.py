@@ -1,13 +1,59 @@
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
-import pandas as pd
 import os
-import random
+import csv
+import re
+import math
+from collections import Counter
+import json
+import urllib.request
 
 app = FastAPI()
 
 DATA_PATH = os.environ.get("DATA_PATH", "/data/products.csv")
-products_df = pd.read_csv(DATA_PATH)
+LLM_URL = os.environ.get("LLM_URL", "http://localhost:8100")
+
+
+def load_products(path: str):
+    products = []
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            products.append({
+                "product_id": int(row["product_id"]),
+                "name": row["name"],
+                "description": row["description"],
+                "price": float(row.get("price", 0)),
+            })
+    return products
+
+
+products = load_products(DATA_PATH)
+
+token_re = re.compile(r"\w+")
+
+def tokenize(text: str):
+    return token_re.findall(text.lower())
+
+doc_freq: Counter[str] = Counter()
+for p in products:
+    terms = set(tokenize(f"{p['name']} {p['description']}"))
+    for t in terms:
+        doc_freq[t] += 1
+
+N_DOCS = len(products)
+idf = {t: math.log(N_DOCS / (1 + df)) for t, df in doc_freq.items()}
+
+
+def vectorize_text(text: str):
+    tokens = tokenize(text)
+    tf = Counter(tokens)
+    if not tokens:
+        return {}
+    return {t: (tf[t] / len(tokens)) * idf.get(t, 0.0) for t in tf}
+
+for p in products:
+    p["vector"] = vectorize_text(f"{p['name']} {p['description']}")
 
 class SearchResult(BaseModel):
     product_id: int
@@ -19,45 +65,50 @@ class SearchResult(BaseModel):
 def simple_search(query: str):
     results = []
     q_lower = query.lower()
-    for _, row in products_df.iterrows():
-        if q_lower in row["name"].lower() or q_lower in row["description"].lower():
+    for p in products:
+        if q_lower in p["name"].lower() or q_lower in p["description"].lower():
             results.append(
                 {
-                    "product_id": int(row["product_id"]),
-                    "name": row["name"],
-                    "description": row["description"],
+                    "product_id": p["product_id"],
+                    "name": p["name"],
+                    "description": p["description"],
                     "relevance": 1.0,
                 }
             )
     return results
 
 
-def vectorize(text: str):
-    random.seed(hash(text) % 2 ** 32)
-    return [random.random() for _ in range(10)]
+def cosine_similarity(v1: dict, v2: dict) -> float:
+    all_keys = set(v1) | set(v2)
+    num = sum(v1.get(k, 0.0) * v2.get(k, 0.0) for k in all_keys)
+    denom1 = math.sqrt(sum(v * v for v in v1.values()))
+    denom2 = math.sqrt(sum(v * v for v in v2.values()))
+    if denom1 == 0 or denom2 == 0:
+        return 0.0
+    return num / (denom1 * denom2)
 
 
 def vector_search(query: str):
-    query_vec = vectorize(query)
+    query_vec = vectorize_text(query)
     results = []
-    for _, row in products_df.iterrows():
-        product_vec = vectorize(f"{row['name']} {row['description']}")
-        similarity = sum(q * p for q, p in zip(query_vec, product_vec))
-        results.append(
-            {
-                "product_id": int(row["product_id"]),
-                "name": row["name"],
-                "description": row["description"],
-                "relevance": float(similarity),
-            }
-        )
+    for p in products:
+        similarity = cosine_similarity(query_vec, p["vector"])
+        if similarity > 0:
+            results.append(
+                {
+                    "product_id": p["product_id"],
+                    "name": p["name"],
+                    "description": p["description"],
+                    "relevance": float(similarity),
+                }
+            )
     results.sort(key=lambda x: x["relevance"], reverse=True)
     return results
 
 
 @app.get("/search", response_model=list[SearchResult])
 def search(query: str = Query(...)):
-    return simple_search(query)
+    return vector_search(query)
 
 
 @app.get("/vector_search", response_model=list[SearchResult])
@@ -70,20 +121,76 @@ class EvaluationRequest(BaseModel):
     results: list[int]  # list of product ids in ranked order
 
 
+class EvaluationMetrics(BaseModel):
+    precision: float
+    recall: float
+    ndcg: float
+
+
 class EvaluationResponse(BaseModel):
     scores: list[float]
+    metrics: EvaluationMetrics
+
+
+product_map = {p["product_id"]: p for p in products}
+
+
+def call_llm(query: str, text: str) -> float:
+    payload = json.dumps({"query": query, "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{LLM_URL}/score", data=payload, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            obj = json.load(resp)
+            return float(obj.get("score", 0.0))
+    except Exception:
+        return 0.0
 
 
 def evaluate_with_llm(query: str, results: list[int]):
-    # Placeholder for LLM integration
-    # TODO: connect to actual LLM and generate scores
-    return [1.0 for _ in results]
+    scores = []
+    for pid in results:
+        prod = product_map.get(pid)
+        if not prod:
+            scores.append(0.0)
+            continue
+        text = f"{prod['name']} {prod['description']}"
+        scores.append(call_llm(query, text))
+    return scores
+
+
+def compute_dcg(vals: list[float]) -> float:
+    return sum(v / math.log2(i + 2) for i, v in enumerate(vals))
+
+
+def compute_ndcg(vals: list[float]) -> float:
+    ideal = sorted(vals, reverse=True)
+    dcg = compute_dcg(vals)
+    idcg = compute_dcg(ideal)
+    return dcg / idcg if idcg > 0 else 0.0
+
+
+def compute_metrics(query: str, ids: list[int], scores: list[float]):
+    # Determine which products are relevant according to LLM for entire catalog
+    relevant = set()
+    for p in products:
+        s = call_llm(query, f"{p['name']} {p['description']}")
+        if s > 0.5:
+            relevant.add(p['product_id'])
+
+    retrieved_relevant = [1 if pid in relevant else 0 for pid in ids]
+    precision = sum(retrieved_relevant) / len(ids) if ids else 0.0
+    recall = sum(retrieved_relevant) / len(relevant) if relevant else 0.0
+    ndcg = compute_ndcg(retrieved_relevant)
+    return EvaluationMetrics(precision=precision, recall=recall, ndcg=ndcg)
 
 
 @app.post("/evaluate", response_model=EvaluationResponse)
 def evaluate(req: EvaluationRequest):
     scores = evaluate_with_llm(req.query, req.results)
-    return EvaluationResponse(scores=scores)
+    metrics = compute_metrics(req.query, req.results, scores)
+    return EvaluationResponse(scores=scores, metrics=metrics)
 
 
 if __name__ == "__main__":

@@ -6,9 +6,21 @@ services:
       - ./data:/data:ro
     ports:
       - "8000:8000"
+    environment:
+      - LLM_URL=http://llm:8100
+    depends_on:
+      - llm
   frontend:
     build: ./frontend
     ports:
       - "8080:8080"
     depends_on:
       - backend
+  llm:
+    build: ./llm_service
+    ports:
+      - "8100:8100"
+    environment:
+      - MISTRAL_PATH=/models/mistral
+    volumes:
+      - ./models/mistral:/models/mistral:ro
