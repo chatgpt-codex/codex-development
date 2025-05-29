@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>LLM Judge Demo</title>
+</head>
+<body>
+  <h1>Product Search</h1>
+  <input id="searchBox" placeholder="Search products..." />
+  <button onclick="doSearch()">Search</button>
+  <h2>Results</h2>
+  <ul id="results"></ul>
+<script>
+function doSearch(){
+  const query = document.getElementById('searchBox').value;
+  fetch('http://localhost:8000/search?query=' + encodeURIComponent(query))
+    .then(res => res.json())
+    .then(data => {
+      const results = document.getElementById('results');
+      results.innerHTML = '';
+      data.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = item.name + ' - ' + item.description;
+        results.appendChild(li);
+      });
+    });
+}
+</script>
+</body>
+</html>
