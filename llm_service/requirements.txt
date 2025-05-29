@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+pydantic
+mistral_inference
+mistral_common
