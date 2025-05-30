@@ -33,3 +33,12 @@ well as overall precision, recall and NDCG metrics.
 - The backend implements a simple TF‑IDF search. The `llm` service can
   run a real Mistral model for evaluation if you mount the pre-downloaded
   weights into the container.
+
+## Testing
+
+Install the development dependencies and run the test suite with pytest:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
