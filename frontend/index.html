@@ -4,10 +4,16 @@
   <title>LLM Judge Demo</title>
 </head>
 <body>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    #results li { margin-bottom: 0.5em; }
+    #metrics { margin-top: 1em; font-weight: bold; }
+  </style>
   <h1>Product Search</h1>
   <input id="searchBox" placeholder="Search products..." />
   <button onclick="doSearch()">Search</button>
   <h2>Results</h2>
+  <div id="metrics"></div>
   <ul id="results"></ul>
 <script>
 function doSearch(){
@@ -15,11 +21,27 @@ function doSearch(){
   fetch('http://localhost:8000/search?query=' + encodeURIComponent(query))
     .then(res => res.json())
     .then(data => {
+      const ids = data.map(item => item.product_id);
+      return fetch('http://localhost:8000/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query, results: ids })
+      }).then(res => res.json())
+        .then(evalData => ({ items: data, eval: evalData }));
+    })
+    .then(({ items, eval: evalData }) => {
       const results = document.getElementById('results');
+      const metrics = document.getElementById('metrics');
       results.innerHTML = '';
-      data.forEach(item => {
+      metrics.textContent =
+        'Precision: ' + evalData.metrics.precision.toFixed(2) +
+        ' \u00a0 Recall: ' + evalData.metrics.recall.toFixed(2) +
+        ' \u00a0 NDCG: ' + evalData.metrics.ndcg.toFixed(2);
+      items.forEach((item, idx) => {
         const li = document.createElement('li');
-        li.textContent = item.name + ' - ' + item.description;
+        const score = evalData.scores[idx];
+        li.textContent = item.name + ' - ' + item.description +
+          ' (score: ' + score.toFixed(2) + ')';
         results.appendChild(li);
       });
     });
