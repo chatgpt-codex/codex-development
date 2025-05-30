@@ -172,16 +172,21 @@ def compute_ndcg(vals: list[float]) -> float:
 
 
 def compute_metrics(query: str, ids: list[int], scores: list[float]):
-    # Determine which products are relevant according to LLM for entire catalog
-    relevant = set()
-    for p in products:
-        s = call_llm(query, f"{p['name']} {p['description']}")
-        if s > 0.5:
-            relevant.add(p['product_id'])
+    """Compute ranking metrics using provided LLM scores.
 
-    retrieved_relevant = [1 if pid in relevant else 0 for pid in ids]
-    precision = sum(retrieved_relevant) / len(ids) if ids else 0.0
-    recall = sum(retrieved_relevant) / len(relevant) if relevant else 0.0
+    The caller supplies the LLM scores corresponding to ``ids`` so this
+    function does not perform additional LLM calls. Items with a score
+    greater than ``0.5`` are treated as relevant.
+    """
+
+    if len(ids) != len(scores):
+        raise ValueError("ids and scores must be the same length")
+
+    retrieved_relevant = [1 if s > 0.5 else 0 for s in scores]
+    precision = sum(retrieved_relevant) / len(retrieved_relevant) if ids else 0.0
+    # Without relevance information for the entire catalog we approximate recall
+    # using only the retrieved documents.
+    recall = precision
     ndcg = compute_ndcg(retrieved_relevant)
     return EvaluationMetrics(precision=precision, recall=recall, ndcg=ndcg)
 
