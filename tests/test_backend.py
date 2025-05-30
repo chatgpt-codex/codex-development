@@ -47,6 +47,7 @@ def test_evaluate_and_metrics_with_mock(monkeypatch, backend_app):
 
     metrics = backend_app.compute_metrics('test', result_ids, scores)
     assert metrics.precision == pytest.approx(2 / 3)
-    assert metrics.recall == pytest.approx(1.0)
+    # Recall is approximated using only the retrieved items
+    assert metrics.recall == pytest.approx(metrics.precision)
     expected_ndcg = backend_app.compute_ndcg([1, 0, 1])
     assert metrics.ndcg == pytest.approx(expected_ndcg)

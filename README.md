@@ -27,6 +27,33 @@ and the results will be shown. The evaluation endpoint is available at
 `POST http://localhost:8000/evaluate` and returns per-item LLM scores as
 well as overall precision, recall and NDCG metrics.
 
+## Using a local Mistral model
+
+The `llm` service can load the "Mistral-7B-Instruct-v0.3" weights if they
+are available on disk. First install the inference package and download
+the model:
+
+```bash
+pip install mistral_inference
+```
+
+```python
+from utils import download_mistral_model
+
+mistral_models_path = download_mistral_model()
+```
+This helper uses `huggingface_hub.snapshot_download` to fetch the weights into the specified folder.
+
+Set the `MISTRAL_PATH` environment variable to this folder (or mount it
+to `/models/mistral` when using Docker Compose) and start the services
+to evaluate results with the real model.
+
+You can quickly test that the model works with:
+
+```bash
+mistral-chat $HOME/mistral_models/7B-Instruct-v0.3 --instruct --max_tokens 256
+```
+
 ## Development Notes
 
 - `data/products.csv` holds a few example products.
